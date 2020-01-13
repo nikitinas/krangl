@@ -1,5 +1,7 @@
 package krangl.util
 
+import java.util.*
+
 //
 // Functional Helpers (missing in kotlin-stdlib)
 //
@@ -37,6 +39,7 @@ internal fun Sequence<*>.joinToMaxLengthString(
         }
     } ?: joinToString(transform = { transform(it) })
 
+fun <T> LinkedList<T>.popSafe() = if (isEmpty()) null else pop()
 
 //fun main(args: Array<String>) {
 //    //    listOf(1,2,3, 4).asSequence().scanLeft(0, { a, b -> a+b}).also{print(it)}
