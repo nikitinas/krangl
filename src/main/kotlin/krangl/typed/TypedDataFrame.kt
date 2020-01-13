@@ -1,16 +1,15 @@
 package krangl.typed
 
-import krangl.DataCol
-import krangl.DataFrame
-import krangl.DataFrameRow
+import krangl.*
 import krangl.util.popSafe
 import java.util.*
 
-interface DataFrameRowEx<out T> {
-    val prev: DataFrameRowEx<T>?
-    val next: DataFrameRowEx<T>?
+interface TypedDataFrameRow<out T> {
+    val prev: TypedDataFrameRow<T>?
+    val next: TypedDataFrameRow<T>?
     val index: Int
-    fun getRow(index: Int): DataFrameRowEx<T>?
+    val fieldNames: Iterable<String>
+    fun getRow(index: Int): TypedDataFrameRow<T>?
     operator fun get(name: String): Any?
 }
 
@@ -18,10 +17,10 @@ interface TypedDataFrame<out T> {
     val df: DataFrame
     val nrow: Int get() = df.nrow
     val columns: List<DataCol> get() = df.cols
-    val rows: Iterable<DataFrameRowEx<T>>
+    val rows: Iterable<TypedDataFrameRow<T>>
     val isTypeDirty: Boolean
 
-    operator fun get(rowIndex: Int): DataFrameRowEx<T>
+    operator fun get(rowIndex: Int): TypedDataFrameRow<T>
     operator fun get(columnName: String): DataCol = df[columnName]
 
     fun select(columns: Iterable<DataCol>) = df.select(columns.map { it.name }).typed<T>(isTypeDirty = true)
@@ -57,56 +56,58 @@ interface TypedDataFrame<out T> {
 internal class TypedDataFrameImpl<T>(override val df: DataFrame, override val isTypeDirty: Boolean = false) : TypedDataFrame<T> {
     private val rowResolver = RowResolver<T>(df)
 
-    override val rows = object : Iterable<DataFrameRowEx<T>> {
+    override val rows = object : Iterable<TypedDataFrameRow<T>> {
         override fun iterator() =
 
-                object : Iterator<DataFrameRowEx<T>> {
+                object : Iterator<TypedDataFrameRow<T>> {
                     var curRow = 0
 
                     val resolver = RowResolver<T>(df)
 
                     override fun hasNext(): Boolean = curRow < nrow
 
-                    override fun next(): DataFrameRowEx<T> = resolver[curRow++]!!
+                    override fun next(): TypedDataFrameRow<T> = resolver[curRow++]!!
                 }
     }
     override fun get(rowIndex: Int) = rowResolver[rowIndex]!!
 }
 
-internal class DataFrameRowExImpl<T>(var row: DataFrameRow, override var index: Int, val resolver: RowResolver<T>) : DataFrameRowEx<T> {
+internal class TypedDataFrameRowImpl<T>(var row: DataFrameRow, override var index: Int, val resolver: RowResolver<T>) : TypedDataFrameRow<T> {
 
     override operator fun get(name: String): Any? = row[name]
 
-    override val prev: DataFrameRowEx<T>?
+    override val prev: TypedDataFrameRow<T>?
         get() = resolver[index - 1]
-    override val next: DataFrameRowEx<T>?
+    override val next: TypedDataFrameRow<T>?
         get() = resolver[index + 1]
 
-    override fun getRow(index: Int): DataFrameRowEx<T>? = resolver[index]
+    override fun getRow(index: Int): TypedDataFrameRow<T>? = resolver[index]
+
+    override val fieldNames = resolver.dataFrame.cols.map{it.name}
 }
 
-internal class RowResolver<T>(private val df: DataFrame) {
-    private val pool = LinkedList<DataFrameRowExImpl<T>>()
-    private val map = mutableMapOf<Int, DataFrameRowExImpl<T>>()
+internal class RowResolver<T>(val dataFrame: DataFrame) {
+    private val pool = LinkedList<TypedDataFrameRowImpl<T>>()
+    private val map = mutableMapOf<Int, TypedDataFrameRowImpl<T>>()
 
     fun resetMapping() {
         pool.addAll(map.values)
         map.clear()
     }
 
-    operator fun get(index: Int): DataFrameRowEx<T>? =
-            if (index < 0 || index >= df.nrow) null
+    operator fun get(index: Int): TypedDataFrameRow<T>? =
+            if (index < 0 || index >= dataFrame.nrow) null
             else map[index] ?: pool.popSafe()?.also {
-                it.row = df.row(index)
+                it.row = dataFrame.row(index)
                 it.index = index
                 map[index] = it
-            } ?: DataFrameRowExImpl(df.row(index), index, this).also { map[index] = it }
+            } ?: TypedDataFrameRowImpl(dataFrame.row(index), index, this).also { map[index] = it }
 
 }
 
-fun <T, D> TypedDataFrame<D>.rowWise(body: ((Int) -> DataFrameRowEx<D>?) -> T): T {
+fun <T, D> TypedDataFrame<D>.rowWise(body: ((Int) -> TypedDataFrameRow<D>?) -> T): T {
     val resolver = RowResolver<D>(this.df)
-    fun getRow(index: Int): DataFrameRowEx<D>? {
+    fun getRow(index: Int): TypedDataFrameRow<D>? {
         resolver.resetMapping()
         return resolver[index]
     }
@@ -118,3 +119,6 @@ fun <T> DataFrame.typed(isTypeDirty: Boolean = false): TypedDataFrame<T> = Typed
 fun <T> TypedDataFrame<*>.typed(isTypeDirty: Boolean = false) = df.typed<T>(isTypeDirty)
 
 fun <T> TypedDataFrame<T>.setDirtyScheme() = df.typed<T>(isTypeDirty = true)
+
+fun <T> TypedDataFrameRow<T>.toDataFrame() =
+        dataFrameOf(fieldNames)(fieldNames.map{get(it)})

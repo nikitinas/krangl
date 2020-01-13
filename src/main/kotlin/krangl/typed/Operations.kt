@@ -8,13 +8,13 @@ class TypedColumnsFromDataRowBuilder<T>(val dataFrame: TypedDataFrame<T>) {
 
     fun add(column: DataCol) = columns.add(column)
 
-    inline fun <reified R> add(name: String, noinline expression: DataFrameRowEx<T>.() -> R?) = add(dataFrame.new(name, expression))
+    inline fun <reified R> add(name: String, noinline expression: TypedDataFrameRow<T>.() -> R?) = add(dataFrame.new(name, expression))
 
-    inline infix fun <reified R> String.to(noinline expression: DataFrameRowEx<T>.() -> R?) = add(this, expression)
+    inline infix fun <reified R> String.to(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
 
-    inline infix fun <reified R> String.`=`(noinline expression: DataFrameRowEx<T>.() -> R?) = add(this, expression)
+    inline infix fun <reified R> String.`=`(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
 
-    inline infix operator fun <reified R> String.invoke(noinline expression: DataFrameRowEx<T>.() -> R?) = add(this, expression)
+    inline infix operator fun <reified R> String.invoke(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
 }
 
 class SummarizeDataFrameBuilder<T>(val dataFrame: TypedDataFrame<T>) {
@@ -27,7 +27,7 @@ class SummarizeDataFrameBuilder<T>(val dataFrame: TypedDataFrame<T>) {
         class ResultSelector<T, D>(owner: Aggregator<T, D>, selector: TypedDataFrame<T>.() -> D)
     }
 
-    inline fun <reified D: Comparable<D>> maxBy(selector: DataFrameRowEx<T>.()->D){
+    inline fun <reified D: Comparable<D>> maxBy(selector: TypedDataFrameRow<T>.()->D){
         dataFrame.groups().map{it.rows.maxBy { selector(it) }}
     }
 
@@ -47,7 +47,7 @@ operator fun DataFrame.plus(col: Iterable<DataCol>) = dataFrameOf(cols + col)
 operator fun <T> TypedDataFrame<T>.plus(col: DataCol) = (df + col).typed<T>()
 operator fun <T> TypedDataFrame<T>.plus(col: Iterable<DataCol>) = dataFrameOf(df.cols + col).typed<T>()
 
-inline fun <reified T, D> TypedDataFrame<D>.add(name: String, noinline expression: DataFrameRowEx<D>.() -> T?) =
+inline fun <reified T, D> TypedDataFrame<D>.add(name: String, noinline expression: TypedDataFrameRow<D>.() -> T?) =
         (this + new(name, expression)).setDirtyScheme()
 
 inline fun <reified T> DataFrame.addColumn(name: String, values: List<T?>) =
@@ -72,7 +72,7 @@ fun <T> TypedDataFrame<T>.map(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit
 
 // filter
 
-fun <T> TypedDataFrame<T>.filter(predicate: DataFrameRowEx<T>.() -> Boolean) =
+fun <T> TypedDataFrame<T>.filter(predicate: TypedDataFrameRow<T>.() -> Boolean) =
         df.filter {
             rowWise { getRow ->
                 BooleanArray(nrow) { index ->

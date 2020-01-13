@@ -2,7 +2,6 @@ package krangl.typed
 
 import krangl.*
 import kotlin.reflect.KClass
-import kotlin.reflect.KProperty
 
 fun DataCol.toDataFrame() = dataFrameOf(this)
 
@@ -48,37 +47,19 @@ fun DoubleCol.toList() = values.toList()
 fun BooleanCol.toList() = values.toList()
 fun StringCol.toList() = values.toList()
 
-data class ColumnBuilder<T>(val values: Array<T?>)
+class InplaceColumnBuilder(val name: String){
+    inline operator fun <reified T> invoke(vararg values: T?) = newColumn(name, values as Array<T?>)
+}
 
-inline fun <reified T, D> TypedDataFrame<D>.new(noinline expression: (DataFrameRowEx<D>) -> T?) =
-        ColumnBuilder(createColumnValues(expression))
+fun column(name: String) = InplaceColumnBuilder(name)
 
-inline fun <reified T> column(values: Array<T?>) =
-        ColumnBuilder(values)
-
-inline fun <reified T> column(values: List<T?>) =
-        ColumnBuilder(values.toTypedArray())
-
-inline fun <reified T> columnOf(vararg values: T?): ColumnBuilder<T> =
-        ColumnBuilder(values as Array<T?>)
-
-inline fun <reified T> List<T?>.toColumn() = column(this)
-
-inline fun <reified T> columnOf(name: String, vararg values: T?) = newColumn(name, values as Array<T?>)
-
-public inline operator fun ColumnBuilder<Long>.getValue(thisRef: Any?, property: KProperty<*>): LongCol = values.toColumn(property.name)
-public inline operator fun ColumnBuilder<Int>.getValue(thisRef: Any?, property: KProperty<*>): IntCol = values.toColumn(property.name)
-public inline operator fun ColumnBuilder<Boolean>.getValue(thisRef: Any?, property: KProperty<*>): BooleanCol = values.toColumn(property.name)
-public inline operator fun ColumnBuilder<String>.getValue(thisRef: Any?, property: KProperty<*>): StringCol = values.toColumn(property.name)
-public inline operator fun ColumnBuilder<Double>.getValue(thisRef: Any?, property: KProperty<*>): DoubleCol = values.toColumn(property.name)
-
-inline fun <reified R, T> TypedDataFrame<T>.new(name: String, noinline expression: DataFrameRowEx<T>.() -> R?) =
+inline fun <reified R, T> TypedDataFrame<T>.new(name: String, noinline expression: TypedDataFrameRow<T>.() -> R?) =
         when (R::class) {
-            Long::class -> createColumnValues(expression as DataFrameRowEx<T>.() -> Long?).toColumn(name)
-            Int::class -> createColumnValues(expression as DataFrameRowEx<T>.() -> Int?).toColumn(name)
-            String::class -> createColumnValues(expression as DataFrameRowEx<T>.() -> String?).toColumn(name)
-            Double::class -> createColumnValues(expression as DataFrameRowEx<T>.() -> Double?).toColumn(name)
-            Boolean::class -> createColumnValues(expression as DataFrameRowEx<T>.() -> Boolean?).toColumn(name)
+            Long::class -> createColumnValues(expression as TypedDataFrameRow<T>.() -> Long?).toColumn(name)
+            Int::class -> createColumnValues(expression as TypedDataFrameRow<T>.() -> Int?).toColumn(name)
+            String::class -> createColumnValues(expression as TypedDataFrameRow<T>.() -> String?).toColumn(name)
+            Double::class -> createColumnValues(expression as TypedDataFrameRow<T>.() -> Double?).toColumn(name)
+            Boolean::class -> createColumnValues(expression as TypedDataFrameRow<T>.() -> Boolean?).toColumn(name)
             else -> AnyCol(name, createColumnValues { expression(this) as Any? })
         }
 
@@ -102,7 +83,7 @@ inline fun <reified T> newColumn(name: String, values: List<T?>) =
             else -> values.toAnyColumn(name)
         }
 
-inline fun <reified T, D> TypedDataFrame<D>.createColumnValues(crossinline expression: DataFrameRowEx<D>.() -> T) =
+inline fun <reified T, D> TypedDataFrame<D>.createColumnValues(crossinline expression: TypedDataFrameRow<D>.() -> T) =
         rowWise { getRow ->
             Array(nrow) { index ->
                 expression(getRow(index)!!)
