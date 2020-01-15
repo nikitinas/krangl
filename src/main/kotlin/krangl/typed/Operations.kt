@@ -1,7 +1,6 @@
 package krangl.typed
 
-import krangl.DataCol
-import krangl.DataFrame
+import krangl.*
 
 class TypedColumnsFromDataRowBuilder<T>(val dataFrame: TypedDataFrame<T>) {
     internal val columns = mutableListOf<DataCol>()
@@ -10,34 +9,24 @@ class TypedColumnsFromDataRowBuilder<T>(val dataFrame: TypedDataFrame<T>) {
 
     inline fun <reified R> add(name: String, noinline expression: TypedDataFrameRow<T>.() -> R?) = add(dataFrame.new(name, expression))
 
-    inline infix fun <reified R> String.to(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
-
-    inline infix fun <reified R> String.`=`(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
-
     inline infix operator fun <reified R> String.invoke(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
 }
 
-class SummarizeDataFrameBuilder<T>(val dataFrame: TypedDataFrame<T>) {
+class SummarizeDataFrameBuilder<T>(internal val dataFrame: TypedDataFrame<T>) {
     internal val columns = mutableListOf<DataCol>()
+
+    fun groups() = dataFrame.groups()
 
     fun add(column: DataCol) = columns.add(column)
 
-    class Aggregator<T,D>(selector: TypedDataFrame<T>.()->D, operation: (accumulator: D,value: D)->D) {
-        class Value<T, D>(owner: Aggregator<T, D>)
-        class ResultSelector<T, D>(owner: Aggregator<T, D>, selector: TypedDataFrame<T>.() -> D)
-    }
+    fun find(selector: TypedDataFrame<T>.() -> TypedDataFrameRow<T>) =
+            dataFrameOf(groups().map { (selector(it) as TypedDataFrameRowImpl<T>).row }).typed<T>()
 
-    inline fun <reified D: Comparable<D>> maxBy(selector: TypedDataFrameRow<T>.()->D){
-        dataFrame.groups().map{it.rows.maxBy { selector(it) }}
-    }
-
-    inline fun <reified R> add(name: String, noinline expression: TypedDataFrame<T>.() -> R?) = add(newColumn(name, dataFrame.groups().map{expression(it)}))
-
-    inline infix fun <reified R> String.to(noinline expression: TypedDataFrame<T>.() -> R?) = add(this, expression)
-
-    inline infix fun <reified R> String.`=`(noinline expression: TypedDataFrame<T>.() -> R?) = add(this, expression)
+    inline fun <reified R> add(name: String, noinline expression: TypedDataFrame<T>.() -> R?) = add(newColumn(name, groups().map { expression(it) }))
 
     inline infix operator fun <reified R> String.invoke(noinline expression: TypedDataFrame<T>.() -> R?) = add(this, expression)
+
+    infix operator fun String.invoke(column: DataCol) = add(column.rename(this))
 }
 
 // add Column
@@ -48,7 +37,7 @@ operator fun <T> TypedDataFrame<T>.plus(col: DataCol) = (df + col).typed<T>()
 operator fun <T> TypedDataFrame<T>.plus(col: Iterable<DataCol>) = dataFrameOf(df.cols + col).typed<T>()
 
 inline fun <reified T, D> TypedDataFrame<D>.add(name: String, noinline expression: TypedDataFrameRow<D>.() -> T?) =
-        (this + new(name, expression)).setDirtyScheme()
+        (this + new(name, expression))
 
 inline fun <reified T> DataFrame.addColumn(name: String, values: List<T?>) =
         this + newColumn(name, values)
@@ -59,10 +48,12 @@ fun DataFrame.addColumn(name: String, col: DataCol) =
 fun <T> TypedDataFrame<T>.add(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit): TypedDataFrame<T> {
     val builder = TypedColumnsFromDataRowBuilder(this)
     body(builder)
-    return dataFrameOf(columns + builder.columns).typed<T>(isTypeDirty = true)
+    return dataFrameOf(columns + builder.columns).typed()
 }
 
-// map (transmute)
+operator fun <T> TypedDataFrame<T>.plus(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit) = add(body)
+
+// map
 
 fun <T> TypedDataFrame<T>.map(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit): DataFrame {
     val builder = TypedColumnsFromDataRowBuilder(this)
@@ -72,20 +63,67 @@ fun <T> TypedDataFrame<T>.map(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit
 
 // filter
 
-fun <T> TypedDataFrame<T>.filter(predicate: TypedDataFrameRow<T>.() -> Boolean) =
+fun <T> TypedDataFrame<T>.filter(predicate: TypedDataFrameRow<T>.(TypedDataFrameRow<T>) -> Boolean) =
         df.filter {
             rowWise { getRow ->
                 BooleanArray(nrow) { index ->
-                    predicate(getRow(index)!!)
+                    val row = getRow(index)!!
+                    predicate(row, row)
                 }
             }
         }.typed<T>()
 
+fun <T> TypedDataFrame<T>.filterNotNull(columns: ColumnSelector<T>) = getColumns(columns).let { cols ->
+    filter { row -> cols.all { col -> row[col.name] != null } }
+}
+
+fun <T> TypedDataFrame<T>.filterNotNullAny(columns: ColumnSelector<T>) = getColumns(columns).let { cols ->
+    filter { row -> cols.any { col -> row[col.name] != null } }
+}
+
+fun <T> TypedDataFrame<T>.filterNotNullAny() = filter { fields.any { it.second != null } }
+
+fun <T> TypedDataFrame<T>.filterNotNull() = filter { fields.all { it.second != null } }
+
+fun <T, D : Comparable<D>> TypedDataFrame<T>.maxBy(selector: TypedDataFrameRow<T>.(TypedDataFrameRow<T>) -> D) =
+        rows.maxBy { selector(it, it) }
+
+fun <T, D : Comparable<D>> TypedDataFrame<T>.minBy(selector: TypedDataFrameRow<T>.(TypedDataFrameRow<T>) -> D) =
+        rows.minBy { selector(it, it) }
 
 // summarize
 
-fun <T> TypedDataFrame<T>.summarize(body: SummarizeDataFrameBuilder<T>.()->Unit):TypedDataFrame<T> {
+fun <T> TypedDataFrame<T>.summarize(body: SummarizeDataFrameBuilder<T>.() -> Unit): TypedDataFrame<T> {
     val builder = SummarizeDataFrameBuilder(this)
     body(builder)
-    return (this.groupedBy() + builder.columns).typed<T>(isTypeDirty = true)
+    return (this.groupedBy() + builder.columns).typed<T>()
 }
+
+// count
+
+fun <T> TypedDataFrame<T>.count(predicate: TypedDataFrameRow<T>.() -> Boolean) = rows.count(predicate)
+
+fun <T> TypedDataFrame<T>.count() = df.count().typed<T>()
+
+// take
+
+fun <T> TypedDataFrame<T>.take(numRows: Int = 5) = df.take(numRows).typed<T>()
+
+fun <T> TypedDataFrame<T>.takeLast(numRows: Int) = df.takeLast(numRows).typed<T>()
+
+fun <T> TypedDataFrame<T>.head(numRows: Int = 5) = take(numRows)
+
+fun <T> TypedDataFrame<T>.tail(numRows: Int = 5) = takeLast(numRows)
+
+// size
+
+val TypedDataFrame<*>.size: Int get() = df.nrow
+val DataFrame.size: Int get() = nrow
+
+// toList
+
+inline fun <reified C> TypedDataFrame<*>.toList() = df.toList<C>()
+inline fun <reified C> DataFrame.toList() = DataFrameToListTypedStub(this, C::class)
+
+fun DataFrame.toList(className: String) = DataFrameToListNamedStub(this, className)
+fun TypedDataFrame<*>.toList(className: String) = df.toList(className)

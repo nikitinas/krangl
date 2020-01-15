@@ -2,6 +2,8 @@ package krangl.typed
 
 import krangl.*
 import kotlin.reflect.KClass
+import kotlin.reflect.KType
+import kotlin.reflect.full.createType
 
 fun DataCol.toDataFrame() = dataFrameOf(this)
 
@@ -19,14 +21,17 @@ fun Array<Double?>.toColumn(name: String) = DoubleCol(name, this)
 fun Array<Boolean?>.toColumn(name: String) = BooleanCol(name, this)
 fun Array<Any?>.toAnyColumn(name: String) = AnyCol(name, this)
 
-val DataCol.valueType: KClass<*>
+val DataCol.valueType: KType
+    get() = valueClass.createType(nullable = hasNulls)
+
+val DataCol.valueClass: KClass<*>
     get() = when (this) {
         is LongCol -> Long::class
         is IntCol -> Int::class
         is StringCol -> String::class
         is DoubleCol -> Double::class
         is BooleanCol -> Boolean::class
-        is AnyCol -> values.firstOrNull { it != null }?.javaClass?.kotlin ?: Any::class
+        is AnyCol -> (values.firstOrNull { it != null }?.javaClass?.kotlin ?: Any::class)
         else -> throw Exception()
     }
 
@@ -90,8 +95,12 @@ inline fun <reified T, D> TypedDataFrame<D>.createColumnValues(crossinline expre
             }
         }
 
-class TypedCol<T : Any>(name: String, val type: KClass<T>, val values: Array<T>) : DataCol(name) {
-    override val length = values.size
+class ColumnGroup(val columns: List<DataCol>): DataCol(""){
+    override fun values(): Array<*> {
+        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+    }
 
-    override fun values() = values
+    override val length: Int
+        get() = TODO("not implemented") //To change initializer of created properties use File | Settings | File Templates.
+
 }
