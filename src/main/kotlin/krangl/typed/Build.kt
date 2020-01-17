@@ -22,13 +22,13 @@ class IterableDataFrameBuilder<T>(val source: Iterable<T>){
     inline infix operator fun <reified R> String.invoke(noinline expression: T.() -> R?) = add(this, expression)
 }
 
-fun <T> Iterable<T>.dataFrame(body: IterableDataFrameBuilder<T>.()->Unit): DataFrame {
+fun <T> Iterable<T>.toDataFrame(body: IterableDataFrameBuilder<T>.()->Unit): DataFrame {
     val builder = IterableDataFrameBuilder<T>(this)
     builder.body()
     return dataFrameOf(builder.columns)
 }
 
-inline fun <reified T> Iterable<T>.dataFrame(): DataFrame {
+inline fun <reified T> Iterable<T>.toDataFrame(): DataFrame {
 
     val declaredMembers = T::class.declaredMembers
 
