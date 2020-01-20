@@ -7,6 +7,8 @@ import kotlin.reflect.KProperty
 import kotlin.reflect.KType
 import kotlin.reflect.full.*
 
+// Public API
+
 @Target(AnnotationTarget.CLASS)
 annotation class DataFrameType(val isOpen: Boolean = true)
 
@@ -21,31 +23,46 @@ enum class CodeGenerationMode {
     ShortNames
 }
 
-object CodeGenerator {
+data class DataFrameToListNamedStub(val df: DataFrame, val className: String)
 
-    var mode = CodeGenerationMode.ShortNames
+data class DataFrameToListTypedStub(val df: DataFrame, val interfaceClass: KClass<*>)
 
-    internal fun getColumnType(valueType: KType) =
-            when (valueType.classifier) {
-                Int::class -> IntCol::class
-                Double::class -> DoubleCol::class
-                Boolean::class -> BooleanCol::class
-                String::class -> StringCol::class
-                else -> AnyCol::class
-            }.createType()
+fun <T> TypedDataFrame<T>.getScheme(name: String? = null, columnSelector: ColumnSelector<T>? = null): String {
+    val interfaceName = name ?: "DataRecord"
+    val cols = columnSelector?.let { getColumns(it) } ?: columns
+    return CodeGenerator.generateInterfaceDeclaration(cols, interfaceName, withBaseInterfaces = false, isOpen = true)
+}
 
-    data class FieldInfo(val columnName: String, val fieldName: String, val fieldType: KType, val columnType: KType) {
+interface CodeGeneratorApi {
+    fun generate(df: DataFrame, property: KProperty<*>): List<String>
+    fun generate(df: TypedDataFrame<*>, property: KProperty<*>): List<String>
+    fun generate(stub: DataFrameToListNamedStub): List<String>
+    fun generate(stub: DataFrameToListTypedStub): List<String>
+
+    fun generate(interfaze: KClass<*>): List<String>
+
+    var mode: CodeGenerationMode
+
+}
+
+// Implementation
+
+object CodeGenerator : CodeGeneratorApi {
+
+    // Data Frame Schema
+    private data class FieldInfo(val columnName: String, val fieldName: String, val fieldType: KType, val columnType: KType) {
+
         fun isSubFieldOf(other: FieldInfo) =
                 columnName == other.columnName && fieldType.isSubtypeOf(other.fieldType) && columnType.isSubtypeOf(other.columnType)
     }
 
-    internal class Scheme(val values: List<FieldInfo>) {
+    private class Scheme(val values: List<FieldInfo>) {
 
         val byColumn: Map<String, FieldInfo> = values.map { it.columnName to it }.toMap()
+
         val byField: Map<String, FieldInfo> = values.map { it.fieldName to it }.toMap()
 
         fun contains(field: FieldInfo) = byField[field.fieldName]?.equals(field) ?: false
-
         fun isSuperTo(other: Scheme) =
                 values.all {
                     other.byColumn[it.columnName]?.isSubFieldOf(it) ?: false
@@ -63,45 +80,22 @@ object CodeGenerator {
         override fun hashCode(): Int {
             return values.sortedBy { it.fieldName }.hashCode()
         }
+
     }
 
-    internal data class GeneratedMarker(val scheme: Scheme, val kclass: KClass<*>, val isOpen: Boolean)
+    private fun getColumnType(valueType: KType) =
+            when (valueType.classifier) {
+                Int::class -> IntCol::class
+                Double::class -> DoubleCol::class
+                Boolean::class -> BooleanCol::class
+                String::class -> StringCol::class
+                else -> AnyCol::class
+            }.createType()
 
-    private val generatedMarkers = mutableListOf<GeneratedMarker>()
-
-    private fun render(clazz: KClass<*>) = when (mode) {
-        CodeGenerationMode.ShortNames -> clazz.simpleName
-        CodeGenerationMode.FullNames -> clazz.qualifiedName
-    }
-
-    private fun shortTypeName(type: KType) =
-            if (type.arguments.size > 0) null
-            else (type.classifier as? KClass<*>)?.simpleName + if (type.isMarkedNullable) "?" else ""
-
-    private fun render(type: KType) = when (mode) {
-        CodeGenerationMode.FullNames -> type.toString()
-        CodeGenerationMode.ShortNames -> shortTypeName(type) ?: type.toString()
-    }
-
-    private fun generateTypedCode(scheme: Scheme, markerType: String): List<String> {
-        val declarations = mutableListOf<String>()
-        val dfTypename = render(TypedDataFrame::class) + "<$markerType>"
-        val rowTypename = render(TypedDataFrameRow::class) + "<$markerType>"
-        scheme.values.sortedBy { it.columnName }.forEach { field ->
-            val getter = "this[\"${field.columnName}\"]"
-            val name = field.fieldName
-            val valueType = render(field.fieldType)
-            val columnType = render(field.columnType)
-            declarations.add(codeForProperty(dfTypename, name, columnType, getter))
-            declarations.add(codeForProperty(rowTypename, name, valueType, getter))
-        }
-        return declarations
-    }
-
-    private fun getSchemeFields(clazz: KClass<*>, withBaseTypes: Boolean): Map<String, FieldInfo> {
+    private fun getFields(clazz: KClass<*>, withBaseTypes: Boolean): Map<String, FieldInfo> {
         val result = mutableMapOf<String, FieldInfo>()
         if (withBaseTypes)
-            clazz.superclasses.forEach { result.putAll(getSchemeFields(it, withBaseTypes)) }
+            clazz.superclasses.forEach { result.putAll(getFields(it, withBaseTypes)) }
         result.putAll(clazz.declaredMemberProperties.map {
             val columnName = it.findAnnotation<ColumnName>()?.name ?: it.name
             val columnType = it.findAnnotation<ColumnType>()?.type?.createType() ?: getColumnType(it.returnType)
@@ -110,28 +104,38 @@ object CodeGenerator {
         return result
     }
 
-    private fun getScheme(kclass: KClass<*>, withBaseTypes: Boolean) = Scheme(getSchemeFields(kclass, withBaseTypes).values.toList())
+    private fun getScheme(clazz: KClass<*>, withBaseTypes: Boolean) = Scheme(getFields(clazz, withBaseTypes).values.toList())
 
     private fun generateValidFieldName(columnName: String) = columnName.replace(" ", "_")
 
-    internal fun getScheme(columns: Iterable<DataCol>) = Scheme(columns.map { FieldInfo(it.name, generateValidFieldName(it.name), it.valueType, it.javaClass.kotlin.createType()) })
+    private fun getScheme(columns: Iterable<DataCol>) = Scheme(columns.map { FieldInfo(it.name, generateValidFieldName(it.name), it.valueType, it.javaClass.kotlin.createType()) })
 
     private val DataFrame.scheme: Scheme
         get() = getScheme(cols)
 
-    private fun codeForProperty(typeName: String, name: String, propertyType: String, getter: String): String {
-        return "val $typeName.$name: $propertyType get() = ($getter) as $propertyType"
+    // Rendering
+
+    override var mode = CodeGenerationMode.ShortNames
+
+    private fun shortTypeName(type: KType) =
+            if (type.arguments.isNotEmpty()) null
+            else (type.classifier as? KClass<*>)?.simpleName + if (type.isMarkedNullable) "?" else ""
+
+    private fun render(clazz: KClass<*>) = when (mode) {
+        CodeGenerationMode.ShortNames -> clazz.simpleName
+        CodeGenerationMode.FullNames -> clazz.qualifiedName
     }
 
-    fun generate(interfaze: KClass<*>): List<String> {
-        val annotation = interfaze.findAnnotation<DataFrameType>() ?: return emptyList()
-        val ownSet = getScheme(interfaze, withBaseTypes = false)
-        val fullSet = getScheme(interfaze, withBaseTypes = true)
-        val typeName = interfaze.qualifiedName!!
-        val result = generateTypedCode(ownSet, typeName)
-        generatedMarkers.add(GeneratedMarker(fullSet, interfaze, annotation.isOpen))
-        return result
+    private fun render(type: KType) = when (mode) {
+        CodeGenerationMode.FullNames -> type.toString()
+        CodeGenerationMode.ShortNames -> shortTypeName(type) ?: type.toString()
     }
+
+    // Generated marker interfaces tracking
+
+    private data class GeneratedMarker(val scheme: Scheme, val kclass: KClass<*>, val isOpen: Boolean)
+
+    private val generatedMarkers = mutableListOf<GeneratedMarker>()
 
     private fun Scheme.getAllBaseMarkers() = generatedMarkers
             .filter { it.scheme.isSuperTo(this) }
@@ -141,14 +145,44 @@ object CodeGenerator {
         return filter { !skip.contains(it.kclass) }
     }
 
-    private fun Scheme.getBaseMarkers() = getAllBaseMarkers().onlyLeafs()
-
     private fun Scheme.getRequiredBaseMarkers() = generatedMarkers
             .filter { it.isOpen && it.scheme.isSuperTo(this) }
 
+    // Code Generation
+
+    private fun generateExtensionProperties(scheme: Scheme, markerType: String): List<String> {
+
+        fun generatePropertyCode(typeName: String, name: String, propertyType: String, getter: String): String {
+            return "val $typeName.$name: $propertyType get() = ($getter) as $propertyType"
+        }
+
+        val declarations = mutableListOf<String>()
+        val dfTypename = render(TypedDataFrame::class) + "<$markerType>"
+        val rowTypename = render(TypedDataFrameRow::class) + "<$markerType>"
+        scheme.values.sortedBy { it.columnName }.forEach { field ->
+            val getter = "this[\"${field.columnName}\"]"
+            val name = field.fieldName
+            val valueType = render(field.fieldType)
+            val columnType = render(field.columnType)
+            declarations.add(generatePropertyCode(dfTypename, name, columnType, getter))
+            declarations.add(generatePropertyCode(rowTypename, name, valueType, getter))
+        }
+        return declarations
+    }
+
+    override fun generate(interfaze: KClass<*>): List<String> {
+        val annotation = interfaze.findAnnotation<DataFrameType>() ?: return emptyList()
+        val ownSet = getScheme(interfaze, withBaseTypes = false)
+        val fullSet = getScheme(interfaze, withBaseTypes = true)
+        val typeName = interfaze.qualifiedName!!
+        val result = generateExtensionProperties(ownSet, typeName)
+        generatedMarkers.add(GeneratedMarker(fullSet, interfaze, annotation.isOpen))
+        return result
+    }
+
     private val processedProperties = mutableSetOf<KProperty<*>>()
 
-    fun generate(df: DataFrame, property: KProperty<*>): List<String> {
+    override fun generate(df: DataFrame, property: KProperty<*>): List<String> {
 
         fun KClass<*>.implements(targetBaseMarkers: Iterable<KClass<*>>): Boolean {
             val superclasses = allSuperclasses + this
@@ -189,7 +223,7 @@ object CodeGenerator {
             markerType = existingMarker.kclass.qualifiedName
         } else {
             markerType = "DataFrameType###"
-            declarations.add(getInterfaceDeclaration(targetScheme, markerType, withBaseInterfaces = true, isOpen = isMutable))
+            declarations.add(this.generateInterfaceDeclaration(targetScheme, markerType, withBaseInterfaces = true, isOpen = isMutable))
         }
 
         val converter = "\$it.typed<$markerType>()"
@@ -203,63 +237,34 @@ object CodeGenerator {
                 else -> null
             }
 
-    fun generate(df: TypedDataFrame<*>, property: KProperty<*>) = generate(df.df, property)
-
-    fun generate(stub: DataFrameToListNamedStub): List<String> {
-        val df = stub.df
-        val scheme = df.scheme
-        val className = stub.className
-
-        val columnNames = df.cols.map { it.name }
-        val classDeclaration = "data class ${className}(" +
-                columnNames.map {
-                    val field = scheme.byColumn[it]!!
-                    "val ${field.fieldName}: ${render(field.fieldType)}"
-                }.joinToString() + ")"
-
-        val converter = "\$it.df.rows.map { $className(" +
-                columnNames.map {
-                    val field = scheme.byColumn[it]!!
-                    "it[\"${field.columnName}\"] as ${render(field.fieldType)}"
-                }.joinToString() + ")}"
-
-        return listOf(classDeclaration, converter)
-    }
-
-    fun generate(stub: DataFrameToListTypedStub): List<String> {
-        val df = stub.df
-        val dfScheme = df.scheme
-        val interfaceScheme = getScheme(stub.interfaze, withBaseTypes = true)
-        if (!interfaceScheme.isSuperTo(dfScheme))
-            throw Exception()
-        val interfaceName = stub.interfaze.simpleName!!
-        val interfaceFullName = stub.interfaze.qualifiedName!!
-        val implementationName = interfaceName + "Impl"
-        val columnNames = interfaceScheme.byColumn.keys.toList()
-
-        val classDeclaration = "data class ${implementationName}(" +
-                columnNames.map {
-                    val field = dfScheme.byColumn[it]!!
-                    "override val ${field.fieldName}: ${render(field.fieldType)}"
-                }.joinToString() + ") : $interfaceFullName"
-
-        val converter = "\$it.df.rows.map { $implementationName(" +
-                columnNames.map {
-                    val field = dfScheme.byColumn[it]!!
-                    "it[\"${field.columnName}\"] as ${render(field.fieldType)}"
-                }.joinToString() + ")}"
-
-        return listOf(classDeclaration, converter)
-    }
+    override fun generate(df: TypedDataFrame<*>, property: KProperty<*>) = generate(df.df, property)
 
     private enum class FieldGenerationMode { declare, override, skip }
 
-    internal fun getInterfaceDeclaration(scheme: Scheme, name: String, withBaseInterfaces: Boolean, isOpen: Boolean): String {
+    private fun computeFieldGenerationModes(scheme: Scheme, requiredBaseMarkers: List<GeneratedMarker>): List<Pair<FieldInfo, FieldGenerationMode>> {
+        return scheme.values.map { field ->
+            val fieldName = field.fieldName
+            var generationMode = FieldGenerationMode.declare
+            for (baseScheme in requiredBaseMarkers) {
+                val baseField = baseScheme.scheme.byField[fieldName]
+                if (baseField != null) {
+                    generationMode = if (baseField.fieldType == field.fieldType) FieldGenerationMode.skip
+                    else if (field.fieldType.isSubtypeOf(baseField.fieldType)) {
+                        generationMode = FieldGenerationMode.override
+                        break
+                    } else throw Exception()
+                }
+            }
+            field to generationMode
+        }
+    }
+
+    private fun generateInterfaceDeclaration(scheme: Scheme, name: String, withBaseInterfaces: Boolean, isOpen: Boolean): String {
 
         val markers = mutableListOf<GeneratedMarker>()
         val fields = if (withBaseInterfaces) {
             markers += scheme.getRequiredBaseMarkers().onlyLeafs()
-            val generatedFields = computeFieldsGeneration(scheme, markers)
+            val generatedFields = computeFieldGenerationModes(scheme, markers)
 
             // try to reduce number of generated fields by implementing some additional interfaces
             val remainedFields = generatedFields.filter { it.second == FieldGenerationMode.declare }.map { it.first }.toMutableList()
@@ -279,7 +284,7 @@ object CodeGenerator {
                     } else break
                 }
             }
-            if (markersAdded) computeFieldsGeneration(scheme, markers) else generatedFields
+            if (markersAdded) computeFieldGenerationModes(scheme, markers) else generatedFields
         } else scheme.values.map { it to FieldGenerationMode.declare }
 
         val leafMarkers = markers.onlyLeafs()
@@ -301,33 +306,43 @@ object CodeGenerator {
         return header + baseInterfacesDeclaration + body
     }
 
-    private fun computeFieldsGeneration(scheme: Scheme, requiredMarkers: List<GeneratedMarker>): List<Pair<FieldInfo, FieldGenerationMode>> {
-        val fields = scheme.values.map { field ->
-            val fieldName = field.fieldName
-            var generationMode = FieldGenerationMode.declare
-            for (baseScheme in requiredMarkers) {
-                val baseField = baseScheme.scheme.byField[fieldName]
-                if (baseField != null) {
-                    generationMode = if (baseField.fieldType == field.fieldType) FieldGenerationMode.skip
-                    else if (field.fieldType.isSubtypeOf(baseField.fieldType)) {
-                        generationMode = FieldGenerationMode.override
-                        break
-                    } else throw Exception()
-                }
-            }
-            field to generationMode
-        }
-        return fields
+    internal fun generateInterfaceDeclaration(columns: Iterable<DataCol>, name: String, withBaseInterfaces: Boolean, isOpen: Boolean) = generateInterfaceDeclaration(getScheme(columns), name, withBaseInterfaces, isOpen)
+
+    // DataFrame -> List converters
+
+    private fun generateToListConverter(className: String, columnNames: List<String>, scheme: Scheme, interfaceName: String? = null): List<String> {
+        val override = if(interfaceName != null) "override " else ""
+        val baseTypes = if(interfaceName != null) " : $interfaceName" else ""
+        val classDeclaration = "data class ${className}(" +
+                columnNames.map {
+                    val field = scheme.byColumn[it]!!
+                    "${override}val ${field.fieldName}: ${render(field.fieldType)}"
+                }.joinToString() + ") " + baseTypes
+
+        val converter = "\$it.df.rows.map { $className(" +
+                columnNames.map {
+                    val field = scheme.byColumn[it]!!
+                    "it[\"${field.columnName}\"] as ${render(field.fieldType)}"
+                }.joinToString() + ")}"
+
+        return listOf(classDeclaration, converter)
     }
+
+    override fun generate(stub: DataFrameToListTypedStub): List<String> {
+        val df = stub.df
+        val dfScheme = df.scheme
+        val interfaceScheme = getScheme(stub.interfaceClass, withBaseTypes = true)
+        if (!interfaceScheme.isSuperTo(dfScheme))
+            throw Exception()
+        val interfaceName = stub.interfaceClass.simpleName!!
+        val interfaceFullName = stub.interfaceClass.qualifiedName!!
+        val className = interfaceName + "Impl"
+        val columnNames = interfaceScheme.byColumn.keys.toList()
+
+        return generateToListConverter(className, columnNames, dfScheme, interfaceFullName)
+    }
+
+    override fun generate(stub: DataFrameToListNamedStub) =
+            generateToListConverter(stub.className, stub.df.cols.map { it.name }, stub.df.scheme, null)
+
 }
-
-fun <T> TypedDataFrame<T>.getScheme(name: String? = null, columnSelector: ColumnSelector<T>? = null): String {
-    val interfaceName = name ?: "DataRecord"
-    val cols = columnSelector?.let { getColumns(it) } ?: columns
-    val scheme = CodeGenerator.getScheme(cols)
-    return CodeGenerator.getInterfaceDeclaration(scheme, interfaceName, withBaseInterfaces = false, isOpen = true)
-}
-
-data class DataFrameToListNamedStub(val df: DataFrame, val className: String)
-
-data class DataFrameToListTypedStub(val df: DataFrame, val interfaze: KClass<*>)
