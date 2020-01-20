@@ -9,7 +9,9 @@ class TypedColumnsFromDataRowBuilder<T>(val dataFrame: TypedDataFrame<T>) {
 
     inline fun <reified R> add(name: String, noinline expression: TypedDataFrameRow<T>.() -> R?) = add(dataFrame.new(name, expression))
 
-    inline infix operator fun <reified R> String.invoke(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
+    inline infix fun <reified R> String.to(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
+
+    inline operator fun <reified R> String.invoke(noinline expression: TypedDataFrameRow<T>.() -> R?) = add(this, expression)
 }
 
 class SummarizeDataFrameBuilder<T>(internal val dataFrame: TypedDataFrame<T>) {
@@ -24,7 +26,9 @@ class SummarizeDataFrameBuilder<T>(internal val dataFrame: TypedDataFrame<T>) {
 
     inline fun <reified R> add(name: String, noinline expression: TypedDataFrame<T>.() -> R?) = add(newColumn(name, groups().map { expression(it) }))
 
-    inline infix operator fun <reified R> String.invoke(noinline expression: TypedDataFrame<T>.() -> R?) = add(this, expression)
+    inline infix fun <reified R> String.to(noinline expression: TypedDataFrame<T>.() -> R?) = add(this, expression)
+
+    inline operator fun <reified R> String.invoke(noinline expression: TypedDataFrame<T>.() -> R?) = add(this, expression)
 
     infix operator fun String.invoke(column: DataCol) = add(column.rename(this))
 }
