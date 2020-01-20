@@ -321,8 +321,8 @@ object CodeGenerator {
     }
 }
 
-fun <T> TypedDataFrame<T>.generateInterface(name: String? = null, columnSelector: ColumnSelector<T>? = null): String {
-    val interfaceName = name ?: "DataEntry"
+fun <T> TypedDataFrame<T>.getScheme(name: String? = null, columnSelector: ColumnSelector<T>? = null): String {
+    val interfaceName = name ?: "DataRecord"
     val cols = columnSelector?.let { getColumns(it) } ?: columns
     val scheme = CodeGenerator.getScheme(cols)
     return CodeGenerator.getInterfaceDeclaration(scheme, interfaceName, withBaseInterfaces = false, isOpen = true)
@@ -331,15 +331,3 @@ fun <T> TypedDataFrame<T>.generateInterface(name: String? = null, columnSelector
 data class DataFrameToListNamedStub(val df: DataFrame, val className: String)
 
 data class DataFrameToListTypedStub(val df: DataFrame, val interfaze: KClass<*>)
-
-interface Ma {
-    val a: Int
-}
-
-interface Pa {
-    val a: Any
-}
-
-interface Chi : Ma, Pa {
-    override val a: Int
-}
