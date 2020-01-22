@@ -55,6 +55,17 @@ fun <T> TypedDataFrame<T>.add(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit
     return dataFrameOf(columns + builder.columns).typed()
 }
 
+fun <T> TypedDataFrame<T>.addRowNumber(columnName: String = "id"): TypedDataFrame<T> {
+    val col = IntCol(columnName, IntArray(size){it})
+    return dataFrameOf(columns + col).typed()
+}
+
+operator fun <T> TypedDataFrame<T>.plus(stub: AddRowNumberStub) = addRowNumber(stub.columnName)
+
+fun rowNumber(columnName: String = "id") = AddRowNumberStub(columnName)
+
+data class AddRowNumberStub(val columnName: String)
+
 operator fun <T> TypedDataFrame<T>.plus(body: TypedColumnsFromDataRowBuilder<T>.() -> Unit) = add(body)
 
 // map
