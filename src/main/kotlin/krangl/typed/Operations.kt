@@ -106,6 +106,11 @@ fun <T, D : Comparable<D>> TypedDataFrame<T>.maxBy(selector: TypedDataFrameRow<T
 fun <T, D : Comparable<D>> TypedDataFrame<T>.minBy(selector: TypedDataFrameRow<T>.(TypedDataFrameRow<T>) -> D) =
         rows.minBy { selector(it, it) }
 
+// group by
+
+inline fun <reified T, D> TypedDataFrame<D>.groupBy(name: String = "key", noinline expression: TypedDataFrameRow<D>.() -> T?) =
+        add(name, expression).df.groupBy(name).typed<D>()
+
 // summarize
 
 fun <T> TypedDataFrame<T>.summarize(body: SummarizeDataFrameBuilder<T>.() -> Unit): TypedDataFrame<T> {
@@ -129,6 +134,9 @@ fun <T> TypedDataFrame<T>.takeLast(numRows: Int) = df.takeLast(numRows).typed<T>
 fun <T> TypedDataFrame<T>.head(numRows: Int = 5) = take(numRows)
 
 fun <T> TypedDataFrame<T>.tail(numRows: Int = 5) = takeLast(numRows)
+
+operator fun <T> TypedDataFrame<T>.get(range: IntRange) =
+    df.filter { rowNumber.map{range.contains(it)}.toBooleanArray() }.typed<T>()
 
 // size
 
