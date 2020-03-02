@@ -97,16 +97,29 @@ object CodeGenerator : CodeGeneratorApi {
         if (withBaseTypes)
             clazz.superclasses.forEach { result.putAll(getFields(it, withBaseTypes)) }
         result.putAll(clazz.declaredMemberProperties.map {
-            val columnName = it.findAnnotation<ColumnName>()?.name ?: it.name
+            val fieldName = generateValidFieldName(it.name)
+            val columnName = it.findAnnotation<ColumnName>()?.name ?: fieldName
             val columnType = it.findAnnotation<ColumnType>()?.type?.createType() ?: getColumnType(it.returnType)
-            it.name to FieldInfo(columnName, it.name, it.returnType, columnType)
+            fieldName to FieldInfo(columnName, fieldName, it.returnType, columnType)
         })
         return result
     }
 
     private fun getScheme(clazz: KClass<*>, withBaseTypes: Boolean) = Scheme(getFields(clazz, withBaseTypes).values.toList())
 
-    private fun generateValidFieldName(columnName: String) = columnName.replace(" ", "_")
+    private val charsToQuote = """[ {}()<>'"/|.\\!?@:;%^&*#$-]""".toRegex()
+
+    private fun generateValidFieldName(name: String) =
+            name.takeIf { it.contains(charsToQuote) }
+                    ?.replace("<", "{")
+                    ?.replace(">", "}")
+                    ?.replace("::", " - ")
+                    ?.replace(": ", " - ")
+                    ?.replace(":", " - ")
+                    ?.replace(".", " ")
+                    ?.replace("/", "-")
+                    ?.let { "`$it`" }
+                    ?: name
 
     private fun getScheme(columns: Iterable<DataCol>) = Scheme(columns.map { FieldInfo(it.name, generateValidFieldName(it.name), it.valueType, it.javaClass.kotlin.createType()) })
 
@@ -130,6 +143,11 @@ object CodeGenerator : CodeGeneratorApi {
         CodeGenerationMode.FullNames -> type.toString()
         CodeGenerationMode.ShortNames -> shortTypeName(type) ?: type.toString()
     }
+
+    fun renderColumnName(name: String) = name
+            .replace("\\", "\\\\")
+            .replace("$", "\\\$")
+            .replace("\"", "\\\"")
 
     // Generated marker interfaces tracking
 
@@ -199,7 +217,7 @@ object CodeGenerator : CodeGeneratorApi {
         val currentMarkerType = getMarkerType(property.returnType)
         if (currentMarkerType != null) {
             // if property is mutable, we need to make sure that its marker type is open in order to force properties of more general types be assignable to it
-            if(!isMutable || currentMarkerType.findAnnotation<DataFrameType>()?.isOpen == true) {
+            if (!isMutable || currentMarkerType.findAnnotation<DataFrameType>()?.isOpen == true) {
                 val markerScheme = getScheme(currentMarkerType, withBaseTypes = true)
                 // for mutable properties we do strong typing only at the first processing, after that we allow its type to be more general than actual data frame type
                 if (wasProcessedBefore || markerScheme == targetScheme) {
@@ -297,9 +315,9 @@ object CodeGenerator : CodeGeneratorApi {
                 FieldGenerationMode.override -> "override "
                 FieldGenerationMode.skip -> throw Exception()
             }
-            val columnNameAnnotation = if (field.columnName != field.fieldName) "\t@ColumnName(\"${field.columnName}\")\n" else ""
+            val columnNameAnnotation = if (field.columnName != field.fieldName) "\t@ColumnName(\"${renderColumnName(field.columnName)}\")\n" else ""
             val columnTypeAnnotation = if (field.columnType != getColumnType(field.fieldType)) "\t@ColumnType(${render(field.columnType)}::class)\n" else ""
-            val valueType = render(field.fieldType)// + if (field.fieldType.isMarkedNullable) "?" else ""
+            val valueType = render(field.fieldType)
             "${columnNameAnnotation}${columnTypeAnnotation}\t${override}val ${field.fieldName}: $valueType"
         }.joinToString("\n")
         val body = if (fieldsDeclaration.isNotBlank()) "{\n$fieldsDeclaration\n}" else ""
@@ -311,8 +329,8 @@ object CodeGenerator : CodeGeneratorApi {
     // DataFrame -> List converters
 
     private fun generateToListConverter(className: String, columnNames: List<String>, scheme: Scheme, interfaceName: String? = null): List<String> {
-        val override = if(interfaceName != null) "override " else ""
-        val baseTypes = if(interfaceName != null) " : $interfaceName" else ""
+        val override = if (interfaceName != null) "override " else ""
+        val baseTypes = if (interfaceName != null) " : $interfaceName" else ""
         val classDeclaration = "data class ${className}(" +
                 columnNames.map {
                     val field = scheme.byColumn[it]!!
