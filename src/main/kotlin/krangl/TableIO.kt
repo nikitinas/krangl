@@ -186,6 +186,8 @@ internal fun String.naAsNull(): String? = if (this == MISSING_VALUE) null else t
 
 internal fun String?.nullAsNA(): String = this ?: MISSING_VALUE
 
+internal fun String.emptyAsNull(): String? = if(this.isEmpty()) null else this
+
 internal fun String?.cellValueAsBoolean(): Boolean? {
     if (this == null) return null
 
@@ -210,27 +212,24 @@ internal fun guessColType(firstElements: List<String>): ColType =
 
 
 internal fun dataColFactory(colName: String, colIndex: Int, colType: ColType, records: MutableList<CSVRecord>): DataCol =
-    when (colType) {
         // see https://github.com/holgerbrandl/krangl/issues/10
-        ColType.Int -> try {
-            IntCol(colName, records.map { it[colIndex]?.toInt() })
+        try {
+            when (colType) {
+                ColType.Int -> IntCol(colName, records.map { it[colIndex]?.emptyAsNull()?.toInt() })
+
+                ColType.Long -> LongCol(colName, records.map { it[colIndex]?.emptyAsNull()?.toLong() })
+
+                ColType.Double -> DoubleCol(colName, records.map { it[colIndex]?.emptyAsNull()?.toDouble() })
+
+                ColType.Boolean -> BooleanCol(colName, records.map { it[colIndex]?.emptyAsNull()?.cellValueAsBoolean() })
+
+                ColType.String -> StringCol(colName, records.map { it[colIndex] })
+
+                ColType.Guess -> dataColFactory(colName, colIndex, guessColType(peekCol(colIndex, records)), records)
+            }
         } catch (e: NumberFormatException) {
             StringCol(colName, records.map { it[colIndex] })
         }
-        ColType.Long -> try {
-            LongCol(colName, records.map { it[colIndex]?.toLong() })
-        } catch (e: NumberFormatException) {
-            StringCol(colName, records.map { it[colIndex] })
-        }
-
-        ColType.Double -> DoubleCol(colName, records.map { it[colIndex]?.toDouble() })
-
-        ColType.Boolean -> BooleanCol(colName, records.map { it[colIndex]?.cellValueAsBoolean() })
-
-        ColType.String -> StringCol(colName, records.map { it[colIndex] })
-
-        ColType.Guess -> dataColFactory(colName, colIndex, guessColType(peekCol(colIndex, records)), records)
-    }
 
 
 // TODO add missing value support with user defined string (e.g. NA here) here
